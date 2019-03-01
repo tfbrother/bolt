@@ -33,13 +33,16 @@ const (
 const DefaultFillPercent = 0.5
 
 // Bucket represents a collection of key/value pairs inside the database.
+// 类似于数据库中的表
 type Bucket struct {
 	*bucket
-	tx       *Tx                // the associated transaction
+	tx *Tx // the associated transaction
+	// Bucket的孩子Bucket，每个Bucket下可创建子Bucket
 	buckets  map[string]*Bucket // subbucket cache
 	page     *page              // inline page reference
 	rootNode *node              // materialized node for the root page.
-	nodes    map[pgid]*node     // node cache
+	// 缓存该Bucket下面所有的node
+	nodes map[pgid]*node // node cache
 
 	// Sets the threshold for filling nodes when they split. By default,
 	// the bucket will fill to 50% but it can be useful to increase this
@@ -100,6 +103,7 @@ func (b *Bucket) Cursor() *Cursor {
 // Bucket retrieves a nested bucket by name.
 // Returns nil if the bucket does not exist.
 // The bucket instance is only valid for the lifetime of the transaction.
+// 已有Bucket下创建Bucket
 func (b *Bucket) Bucket(name []byte) *Bucket {
 	if b.buckets != nil {
 		if child := b.buckets[string(name)]; child != nil {
@@ -158,6 +162,7 @@ func (b *Bucket) openBucket(value []byte) *Bucket {
 // CreateBucket creates a new bucket at the given key and returns the new bucket.
 // Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
 // The bucket instance is only valid for the lifetime of the transaction.
+// 在root Bucket下创建Bucket
 func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	if b.tx.db == nil {
 		return nil, ErrTxClosed
@@ -188,7 +193,9 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	var value = bucket.write()
 
 	// Insert into node.
+	// 对key进行深度拷贝以防它引用的byte slice被回收
 	key = cloneBytes(key)
+	// 往对应的位置处插入一个key/value对
 	c.node().put(key, key, value, 0, bucketLeafFlag)
 
 	// Since subbuckets are not allowed on inline buckets, we need to
@@ -640,6 +647,7 @@ func (b *Bucket) rebalance() {
 }
 
 // node creates a node from a page and associates it with a given parent.
+// 加载制定的page到node中，并挂载到parent下面去。
 func (b *Bucket) node(pgid pgid, parent *node) *node {
 	_assert(b.nodes != nil, "nodes map expected")
 
@@ -663,6 +671,7 @@ func (b *Bucket) node(pgid pgid, parent *node) *node {
 	}
 
 	// Read the page into the node and cache it.
+	// 加载page到node
 	n.read(p)
 	b.nodes[pgid] = n
 
@@ -705,6 +714,7 @@ func (b *Bucket) dereference() {
 func (b *Bucket) pageNode(id pgid) (*page, *node) {
 	// Inline buckets have a fake page embedded in their value so treat them
 	// differently. We'll return the rootNode (if available) or the fake page.
+	// 如果是Inline Bucket 此时返回bucket.rootNode或者b.page
 	if b.root == 0 {
 		if id != 0 {
 			panic(fmt.Sprintf("inline bucket non-zero page access(2): %d != 0", id))

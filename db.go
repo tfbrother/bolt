@@ -98,13 +98,16 @@ type DB struct {
 	file     *os.File
 	lockfile *os.File // windows only
 	dataref  []byte   // mmap'ed readonly, write throws SEGV
-	data     *[maxMapSize]byte
-	datasz   int
-	filesz   int // current on disk file size
+	// 内存映射引用
+	data   *[maxMapSize]byte
+	datasz int
+	filesz int // current on disk file size
+	// meta0&meta1记录系统元数据
 	meta0    *meta
 	meta1    *meta
 	pageSize int
 	opened   bool
+	// 存储DB上正在执行的事务, rwtx读写事务，txs只读事务
 	rwtx     *Tx
 	txs      []*Tx
 	freelist *freelist
@@ -115,6 +118,7 @@ type DB struct {
 	batchMu sync.Mutex
 	batch   *batch
 
+	// 写并发控制锁
 	rwlock   sync.Mutex   // Allows only one writer at a time.
 	metalock sync.Mutex   // Protects meta page access.
 	mmaplock sync.RWMutex // Protects mmap access during remapping.
@@ -201,6 +205,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 		}
 	} else {
 		// Read the first meta page to determine the page size.
+		// buf刚刚4K大小，对应一页
 		var buf [0x1000]byte
 		if _, err := db.file.ReadAt(buf[:], 0); err == nil {
 			m := db.pageInBuffer(buf[:], 0).meta()
@@ -232,6 +237,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 		return nil, err
 	}
 
+	// 读取db文件中的freelist用于初始化db的freelist
 	// Read in the freelist.
 	db.freelist = newFreelist()
 	db.freelist.read(db.page(db.meta().freelist))
@@ -345,6 +351,7 @@ func (db *DB) init() error {
 	db.pageSize = os.Getpagesize()
 
 	// Create two meta pages on a buffer.
+	// buf大小为4页，16K
 	buf := make([]byte, db.pageSize*4)
 	for i := 0; i < 2; i++ {
 		p := db.pageInBuffer(buf[:], pgid(i))
@@ -357,6 +364,7 @@ func (db *DB) init() error {
 		m.version = version
 		m.pageSize = uint32(db.pageSize)
 		m.freelist = 2
+		// 记录root bucket信息，root bucket的root page id是3
 		m.root = bucket{root: 3}
 		m.pgid = 4
 		m.txid = txid(i)
@@ -376,9 +384,11 @@ func (db *DB) init() error {
 	p.count = 0
 
 	// Write the buffer to our data file.
+	// 在off偏移量处向db.file写入长度为buf的字节。可能是写入到操作系统的文件缓存中，所以想下面需要持久化。
 	if _, err := db.ops.writeAt(buf, 0); err != nil {
 		return err
 	}
+	// 持久化db文件
 	if err := fdatasync(db); err != nil {
 		return err
 	}
@@ -509,6 +519,7 @@ func (db *DB) beginRWTx() (*Tx, error) {
 
 	// Obtain writer lock. This is released by the transaction when it closes.
 	// This enforces only one writer transaction at a time.
+	// 加锁保证不会产生写写并发
 	db.rwlock.Lock()
 
 	// Once we have the writer lock then we can lock the meta pages so that
@@ -528,6 +539,7 @@ func (db *DB) beginRWTx() (*Tx, error) {
 	db.rwtx = t
 
 	// Free any pages associated with closed read-only transactions.
+	// 取最小值
 	var minid txid = 0xFFFFFFFFFFFFFFFF
 	for _, t := range db.txs {
 		if t.meta.txid < minid {
@@ -789,17 +801,21 @@ func (db *DB) Info() *Info {
 }
 
 // page retrieves a page reference from the mmap based on the current page size.
+// 返回内存映射中对应的page
 func (db *DB) page(id pgid) *page {
 	pos := id * pgid(db.pageSize)
 	return (*page)(unsafe.Pointer(&db.data[pos]))
 }
 
 // pageInBuffer retrieves a page reference from a given byte array based on the current page size.
+// 从当前给的字节数组中返回指定的页引用，其实就是从给定的空间里面初始化一个page引用。
+// 避免每次初始化page时，临时去申请内存。
 func (db *DB) pageInBuffer(b []byte, id pgid) *page {
 	return (*page)(unsafe.Pointer(&b[id*pgid(db.pageSize)]))
 }
 
 // meta retrieves the current meta page reference.
+// 返回当前db引用的meta page
 func (db *DB) meta() *meta {
 	// We have to return the meta with the highest txid which doesn't fail
 	// validation. Otherwise, we can cause errors when in fact the database is
@@ -968,14 +984,14 @@ type Info struct {
 }
 
 type meta struct {
-	magic    uint32
-	version  uint32
+	magic    uint32 // 魔数，不解释
+	version  uint32 // 版本号
 	pageSize uint32
-	flags    uint32
-	root     bucket
-	freelist pgid
-	pgid     pgid
-	txid     txid
+	flags    uint32 //
+	root     bucket //
+	freelist pgid   // 指向freelist的pgid
+	pgid     pgid   // 正式数据是从pgid开始的
+	txid     txid   // 事务序列号
 	checksum uint64
 }
 
@@ -997,6 +1013,7 @@ func (m *meta) copy(dest *meta) {
 }
 
 // write writes the meta onto a page.
+// 将meta写入page
 func (m *meta) write(p *page) {
 	if m.root.root >= m.pgid {
 		panic(fmt.Sprintf("root bucket pgid (%d) above high water mark (%d)", m.root.root, m.pgid))

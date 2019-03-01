@@ -10,14 +10,16 @@ import (
 // node represents an in-memory, deserialized page.
 type node struct {
 	bucket     *Bucket
-	isLeaf     bool
-	unbalanced bool
+	isLeaf     bool // 标记该节点是否为叶子节点，决定inode中记录的是什么
+	unbalanced bool // 当该node上有删除操作时，标记为true，当Tx执行Commit时，会执行rebalance，将inode重新排列
 	spilled    bool
-	key        []byte
-	pgid       pgid
-	parent     *node
-	children   nodes
-	inodes     inodes
+	// 当加载page变成node缓存时，将该node下边界inode[0]的key缓存在node上，
+	// 用于在parent node 查找本身时使用
+	key      []byte
+	pgid     pgid
+	parent   *node
+	children nodes
+	inodes   inodes
 }
 
 // root returns the top-level node this node is attached to.
@@ -113,6 +115,7 @@ func (n *node) prevSibling() *node {
 }
 
 // put inserts a key/value.
+// 在node中插入一个key/value对，即inode
 func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	if pgid >= n.bucket.tx.meta.pgid {
 		panic(fmt.Sprintf("pgid (%d) above high water mark (%d)", pgid, n.bucket.tx.meta.pgid))
@@ -123,11 +126,13 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	}
 
 	// Find insertion index.
+	// 其实是在n.inodes中找到第一个大于等于oldKey的索引位置。B树的特性
 	index := sort.Search(len(n.inodes), func(i int) bool { return bytes.Compare(n.inodes[i].key, oldKey) != -1 })
 
 	// Add capacity and shift nodes if we don't have an exact match and need to insert.
+	// 如果oldKey没有找到精确的匹配，则就是插入，否则就是替换
 	exact := (len(n.inodes) > 0 && index < len(n.inodes) && bytes.Equal(n.inodes[index].key, oldKey))
-	if !exact {
+	if !exact { // 在index处进行插入
 		n.inodes = append(n.inodes, inode{})
 		copy(n.inodes[index+1:], n.inodes[index:])
 	}
@@ -158,6 +163,7 @@ func (n *node) del(key []byte) {
 }
 
 // read initializes the node from a page.
+// 将磁盘中的page加载到内存中的node来
 func (n *node) read(p *page) {
 	n.pgid = p.id
 	n.isLeaf = ((p.flags & leafPageFlag) != 0)
@@ -188,6 +194,7 @@ func (n *node) read(p *page) {
 }
 
 // write writes the items onto one or more pages.
+// 将node从内存写入到指定的磁盘page中
 func (n *node) write(p *page) {
 	// Initialize page.
 	if n.isLeaf {
@@ -196,6 +203,7 @@ func (n *node) write(p *page) {
 		p.flags |= branchPageFlag
 	}
 
+	// 0xFFFF是16位的最大值，而p.count是uint16位的
 	if len(n.inodes) >= 0xFFFF {
 		panic(fmt.Sprintf("inode overflow: %d (pgid=%d)", len(n.inodes), p.id))
 	}
@@ -595,9 +603,17 @@ func (s nodes) Less(i, j int) bool { return bytes.Compare(s[i].inodes[0].key, s[
 // It can be used to point to elements in a page or point
 // to an element which hasn't been added to a page yet.
 type inode struct {
+	// 当所在node为叶子节点时，记录key的flag
 	flags uint32
-	pgid  pgid
-	key   []byte
+	// 当所在node为叶子节点时，不使用，当所在node为分支节点时，记录所指向的page-id
+	pgid pgid
+
+	// 当所在node为叶子节点时，记录的为拥有的key；当所在node为分支节点时，记录的是子
+	// 节点的上key的下边界。例如，当当前node为分支节点，拥有3个分支，[1,2,3][5,6,7][10,11,12]
+	// 这该node上可能有3个inode，记录的key为[1,5,10]。当进行查找时2时，2<5,则去第0个子分支上继
+	// 续搜索，当进行查找4时，1<4<5,则去第1个分支上去继续查找。
+	key []byte
+	// 当所在node为叶子节点时，记录的为拥有的value
 	value []byte
 }
 

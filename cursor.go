@@ -15,9 +15,11 @@ import (
 // Changing data while traversing with a cursor may cause it to be invalidated
 // and return unexpected keys and/or values. You must reposition your cursor
 // after mutating data.
+// Cursor其实只是保存了查找过程中的搜索路径而已。类似一个stack，栈底是搜索路径的起点，
+// 栈顶是搜索路径的终点。Cursor.seek(key)完成后，Cursor中就已经记录了到key的搜索路径。
 type Cursor struct {
-	bucket *Bucket
-	stack  []elemRef
+	bucket *Bucket   // parent Bucket
+	stack  []elemRef // 遍历过程中记录走过的page-id或者node，elemRef中的page、node同时只能有一个存在
 }
 
 // Bucket returns the bucket that this cursor was created from.
@@ -151,11 +153,14 @@ func (c *Cursor) Delete() error {
 
 // seek moves the cursor to a given key and returns it.
 // If the key does not exist then the next key is used.
+// seek移动游标到给定的key的位置并返回key/value
+// 如果没有找到，游标移动到可用的位置，该key直接可以使用了。
 func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 	_assert(c.bucket.tx.db != nil, "tx closed")
 
 	// Start from root page/node and traverse to correct page.
 	c.stack = c.stack[:0]
+	// 从父Bucket的root开始，对于Inline Bucket，请记住其root一定是0
 	c.search(seek, c.bucket.root)
 	ref := &c.stack[len(c.stack)-1]
 
@@ -251,6 +256,8 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 
 // search recursively performs a binary search against a given page/node until it finds a given key.
 func (c *Cursor) search(key []byte, pgid pgid) {
+	// 这里是关键，对于InlineBucket pageNode返回的是bucket的root page
+	// 根据pgid，返回对应的page/node ，如果之前该页已经读取过，就返回node，否则就返回p
 	p, n := c.bucket.pageNode(pgid)
 	if p != nil && (p.flags&(branchPageFlag|leafPageFlag)) == 0 {
 		panic(fmt.Sprintf("invalid page type: %d: %x", p.id, p.flags))
@@ -355,6 +362,7 @@ func (c *Cursor) keyValue() ([]byte, []byte, uint32) {
 }
 
 // node returns the node that the cursor is currently positioned on.
+// 返回当前游标指向位置的node，不存在则创建
 func (c *Cursor) node() *node {
 	_assert(len(c.stack) > 0, "accessing a node with a zero-length cursor stack")
 
@@ -378,6 +386,7 @@ func (c *Cursor) node() *node {
 
 // elemRef represents a reference to an element on a given page/node.
 type elemRef struct {
+	// page、node同时只能有一个存在
 	page  *page
 	node  *node
 	index int

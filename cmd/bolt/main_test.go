@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/boltdb/bolt"
-	"github.com/boltdb/bolt/cmd/bolt"
+	"github.com/tfbrother/bolt"
+	"github.com/tfbrother/bolt/cmd/bolt"
 )
 
 // Ensure the "info" command can print information about a database.

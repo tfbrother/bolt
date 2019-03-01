@@ -15,10 +15,10 @@ const branchPageElementSize = int(unsafe.Sizeof(branchPageElement{}))
 const leafPageElementSize = int(unsafe.Sizeof(leafPageElement{}))
 
 const (
-	branchPageFlag   = 0x01
-	leafPageFlag     = 0x02
-	metaPageFlag     = 0x04
-	freelistPageFlag = 0x10
+	branchPageFlag   = 0x01 // 分支节点
+	leafPageFlag     = 0x02 // 叶子节点
+	metaPageFlag     = 0x04 // meta页
+	freelistPageFlag = 0x10 // freelist页
 )
 
 const (
@@ -28,11 +28,15 @@ const (
 type pgid uint64
 
 type page struct {
-	id       pgid
-	flags    uint16
-	count    uint16
+	id pgid
+	// 指此页中保存的具体数据类型。(branchPageFlag，leafPageFlag等)
+	flags uint16
+	// 记录具体数据类型中的技术，不同的类型具有不同的含义
+	count uint16
+	// 记录是否有跨页
 	overflow uint32
-	ptr      uintptr
+	// 是具体的数据类型。这种用法让我想起来了c语言中的用法。在Linux内核中经常用到。比如典型的场景就是虚拟文件系统的接口。
+	ptr uintptr
 }
 
 // typ returns a human readable page type string used for debugging.
@@ -55,6 +59,9 @@ func (p *page) meta() *meta {
 }
 
 // leafPageElement retrieves the leaf node by index
+// maxAllocSize=0x7FFFFFFF，而leafPageElement的大小是16字节，
+// 所以leafPageElement数组的最大数量为0x7FFFFFF
+// golang在申请这么大的数组指针的时候，并不会真正申请这么大的内存
 func (p *page) leafPageElement(index uint16) *leafPageElement {
 	n := &((*[0x7FFFFFF]leafPageElement)(unsafe.Pointer(&p.ptr)))[index]
 	return n
@@ -109,9 +116,9 @@ func (n *branchPageElement) key() []byte {
 // leafPageElement represents a node on a leaf page.
 type leafPageElement struct {
 	flags uint32
-	pos   uint32
-	ksize uint32
-	vsize uint32
+	pos   uint32 // 相对的偏移
+	ksize uint32 // key的大小
+	vsize uint32 // value的大小
 }
 
 // key returns a byte slice of the node key.

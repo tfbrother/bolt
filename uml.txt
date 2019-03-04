@@ -1,0 +1,259 @@
+@startuml
+namespace github.com\\tfbrother\\bolt {
+ class Bucket {
+  *bucket
+  tx *Tx
+  buckets map[string]*Bucket
+  page *page
+  rootNode *node
+  nodes map[pgid]*node
+  FillPercent float64
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class bucket {
+  root pgid
+  sequence uint64
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class BucketStats {
+  BranchPageN int
+  BranchOverflowN int
+  LeafPageN int
+  LeafOverflowN int
+  KeyN int
+  Depth int
+  BranchAlloc int
+  BranchInuse int
+  LeafAlloc int
+  LeafInuse int
+  BucketN int
+  InlineBucketN int
+  InlineBucketInuse int
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class Cursor {
+  bucket *Bucket
+  stack []elemRef
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class elemRef {
+  page *page
+  node *node
+  index int
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class DB {
+  StrictMode bool
+  NoSync bool
+  NoGrowSync bool
+  MmapFlags int
+  MaxBatchSize int
+  MaxBatchDelay time.Duration
+  AllocSize int
+  path string
+  file *os.File
+  lockfile *os.File
+  dataref []byte
+  data *[]byte
+  datasz int
+  filesz int
+  meta0 *meta
+  meta1 *meta
+  pageSize int
+  opened bool
+  rwtx *Tx
+  txs []*Tx
+  freelist *freelist
+  stats Stats
+  pagePool sync.Pool
+  batchMu sync.Mutex
+  batch *batch
+  rwlock sync.Mutex
+  metalock sync.Mutex
+  mmaplock sync.RWMutex
+  statlock sync.RWMutex
+  ops struct {   writeAt func(b []byte,off int64)(n int,err error) }
+  readOnly bool
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class call {
+  fn func(*Tx)error
+  err chan error
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class batch {
+  db *DB
+  timer *time.Timer
+  start sync.Once
+  calls []call
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class panicked {
+  reason interface  { }
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class Options {
+  Timeout time.Duration
+  NoGrowSync bool
+  ReadOnly bool
+  MmapFlags int
+  InitialMmapSize int
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class Stats {
+  FreePageN int
+  PendingPageN int
+  FreeAlloc int
+  FreelistInuse int
+  TxN int
+  OpenTxN int
+  TxStats TxStats
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class Info {
+  Data uintptr
+  PageSize int
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class meta {
+  magic uint32
+  version uint32
+  pageSize uint32
+  flags uint32
+  root bucket
+  freelist pgid
+  pgid pgid
+  txid txid
+  checksum uint64
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class freelist {
+  ids []pgid
+  pending map[txid][]pgid
+  cache map[pgid]bool
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class node {
+  bucket *Bucket
+  isLeaf bool
+  unbalanced bool
+  spilled bool
+  key []byte
+  pgid pgid
+  parent *node
+  children nodes
+  inodes inodes
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class inode {
+  flags uint32
+  pgid pgid
+  key []byte
+  value []byte
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class page {
+  id pgid
+  flags uint16
+  count uint16
+  overflow uint32
+  ptr uintptr
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class branchPageElement {
+  pos uint32
+  ksize uint32
+  pgid pgid
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class leafPageElement {
+  flags uint32
+  pos uint32
+  ksize uint32
+  vsize uint32
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class PageInfo {
+  ID int
+  Type string
+  Count int
+  OverflowCount int
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class Tx {
+  writable bool
+  managed bool
+  db *DB
+  meta *meta
+  root Bucket
+  pages map[pgid]*page
+  stats TxStats
+  commitHandlers []func()
+  WriteFlag int
+} 
+}
+namespace github.com\\tfbrother\\bolt {
+ class TxStats {
+  PageCount int
+  PageAlloc int
+  CursorCount int
+  NodeCount int
+  NodeDeref int
+  Rebalance int
+  RebalanceTime time.Duration
+  Split int
+  Spill int
+  SpillTime time.Duration
+  Write int
+  WriteTime time.Duration
+} 
+}
+github.com\\tfbrother\\bolt.Bucket -|> github.com\\tfbrother\\bolt.bucket
+github.com\\tfbrother\\bolt.Bucket ---> github.com\\tfbrother\\bolt.Tx : tx
+github.com\\tfbrother\\bolt.Bucket ---> "*" github.com\\tfbrother\\bolt.Bucket : buckets
+github.com\\tfbrother\\bolt.Bucket ---> github.com\\tfbrother\\bolt.page : page
+github.com\\tfbrother\\bolt.Bucket ---> github.com\\tfbrother\\bolt.node : rootNode
+github.com\\tfbrother\\bolt.Bucket ---> "*" github.com\\tfbrother\\bolt.node : nodes
+github.com\\tfbrother\\bolt.Cursor ---> github.com\\tfbrother\\bolt.Bucket : bucket
+github.com\\tfbrother\\bolt.Cursor ---> "*" github.com\\tfbrother\\bolt.elemRef : stack
+github.com\\tfbrother\\bolt.elemRef ---> github.com\\tfbrother\\bolt.page : page
+github.com\\tfbrother\\bolt.elemRef ---> github.com\\tfbrother\\bolt.node : node
+github.com\\tfbrother\\bolt.DB ---> github.com\\tfbrother\\bolt.meta : meta0
+github.com\\tfbrother\\bolt.DB ---> github.com\\tfbrother\\bolt.meta : meta1
+github.com\\tfbrother\\bolt.DB ---> github.com\\tfbrother\\bolt.Tx : rwtx
+github.com\\tfbrother\\bolt.DB ---> "*" github.com\\tfbrother\\bolt.Tx : txs
+github.com\\tfbrother\\bolt.DB ---> github.com\\tfbrother\\bolt.freelist : freelist
+github.com\\tfbrother\\bolt.DB ---> github.com\\tfbrother\\bolt.Stats : stats
+github.com\\tfbrother\\bolt.DB ---> github.com\\tfbrother\\bolt.batch : batch
+github.com\\tfbrother\\bolt.batch ---> github.com\\tfbrother\\bolt.DB : db
+github.com\\tfbrother\\bolt.batch ---> "*" github.com\\tfbrother\\bolt.call : calls
+github.com\\tfbrother\\bolt.Stats ---> github.com\\tfbrother\\bolt.TxStats : TxStats
+github.com\\tfbrother\\bolt.meta ---> github.com\\tfbrother\\bolt.bucket : root
+github.com\\tfbrother\\bolt.node ---> github.com\\tfbrother\\bolt.Bucket : bucket
+github.com\\tfbrother\\bolt.node ---> github.com\\tfbrother\\bolt.node : parent
+github.com\\tfbrother\\bolt.Tx ---> github.com\\tfbrother\\bolt.DB : db
+github.com\\tfbrother\\bolt.Tx ---> github.com\\tfbrother\\bolt.meta : meta
+github.com\\tfbrother\\bolt.Tx ---> github.com\\tfbrother\\bolt.Bucket : root
+github.com\\tfbrother\\bolt.Tx ---> "*" github.com\\tfbrother\\bolt.page : pages
+github.com\\tfbrother\\bolt.Tx ---> github.com\\tfbrother\\bolt.TxStats : stats
+@enduml

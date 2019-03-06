@@ -13,7 +13,7 @@ import (
 	"testing"
 	"testing/quick"
 
-	"github.com/boltdb/bolt"
+	"github.com/tfbrother/bolt"
 )
 
 // Ensure that a bucket that gets a non-existent key returns nil.
@@ -1907,3 +1907,73 @@ func ExampleBucket_ForEach() {
 	// A dog is fun.
 	// A liger is awesome.
 }
+
+//func BenchmarkBucket_CreateBucket(b *testing.B) {
+//	b.StopTimer()
+//	db := MustOpenDB()
+//	defer db.MustClose()
+//	b.StartTimer()
+//
+//	for i := 0; i <= b.N; i++ {
+//		if err := db.Update(func(tx *bolt.Tx) error {
+//			_, err := tx.CreateBucket([]byte("widgets" + strconv.Itoa(i)))
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//			return nil
+//		}); err != nil {
+//			b.Fatal(err)
+//		}
+//
+//	}
+//}
+
+func bench(b *testing.B, size int, prefix string) {
+	b.StopTimer()
+
+	db, err := bolt.Open(tempfile(), 0666, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	defer db.Close()
+
+	if err := db.Update(func(tx *bolt.Tx) error {
+		widgets, err := tx.CreateBucket([]byte(prefix + "widgets"))
+		if err != nil {
+			b.Fatal(err)
+		}
+		for j := 0; j < size*100; j++ {
+			if err := widgets.Put([]byte("foo"+strconv.Itoa(j)), []byte("bar"+strconv.Itoa(j))); err != nil {
+				b.Fatal(err)
+			}
+		}
+		return nil
+	}); err != nil {
+		b.Fatal(err)
+	}
+
+	b.StartTimer()
+
+	for i := 0; i <= b.N; i++ {
+		if err := db.Update(func(tx *bolt.Tx) error {
+			for j := 0; j < size; j++ {
+				_, err := tx.CreateBucket([]byte(strconv.Itoa(j) + prefix + strconv.Itoa(i) + "widgets"))
+				if err != nil {
+					b.Fatal(err)
+				}
+				return nil
+			}
+			return nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+
+	}
+	b.StopTimer()
+}
+
+func BenchmarkBucket_CreateBucket1e2(b *testing.B) { bench(b, 1e2, "1e2") }
+func BenchmarkBucket_CreateBucket1e3(b *testing.B) { bench(b, 1e3, "1e3") }
+
+//func BenchmarkBucket_CreateBucket1e6(b *testing.B) { bench(b, 1e6, "1e6") }

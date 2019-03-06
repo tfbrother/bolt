@@ -19,7 +19,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/boltdb/bolt"
+	"github.com/tfbrother/bolt"
 )
 
 var statsFlag = flag.Bool("stats", false, "show performance stats")
@@ -1191,6 +1191,7 @@ func ExampleDB_Begin_ReadOnly() {
 }
 
 func BenchmarkDBBatchAutomatic(b *testing.B) {
+	return
 	db := MustOpenDB()
 	defer db.MustClose()
 	if err := db.Update(func(tx *bolt.Tx) error {
@@ -1236,6 +1237,7 @@ func BenchmarkDBBatchAutomatic(b *testing.B) {
 }
 
 func BenchmarkDBBatchSingle(b *testing.B) {
+	return
 	db := MustOpenDB()
 	defer db.MustClose()
 	if err := db.Update(func(tx *bolt.Tx) error {
@@ -1280,6 +1282,7 @@ func BenchmarkDBBatchSingle(b *testing.B) {
 }
 
 func BenchmarkDBBatchManual10x100(b *testing.B) {
+	return
 	db := MustOpenDB()
 	defer db.MustClose()
 	if err := db.Update(func(tx *bolt.Tx) error {
@@ -1329,6 +1332,7 @@ func BenchmarkDBBatchManual10x100(b *testing.B) {
 }
 
 func validateBatchBench(b *testing.B, db *DB) {
+	return
 	var rollback = errors.New("sentinel error to cause rollback")
 	validate := func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("bench"))

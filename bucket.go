@@ -215,14 +215,14 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	// to be treated as a regular, non-inline bucket for the rest of the tx.
 	b.page = nil
 
-	// TODO 此处已经知道value，但是在Bucket函数中又去搜索了一次B+树获取value值，是不是有多余啊？可否换成如下代码？
-	// var child = b.openBucket(v)
-	//	if b.buckets != nil {
-	//		b.buckets[string(name)] = child
-	//	}
-	//
-	//	return child, nil
-	return b.Bucket(key), nil
+	// TODO 此处已经知道value，但是在Bucket函数中又去搜索了一次B+树获取value值，多余，可换成如下代码
+	var child = b.openBucket(value)
+	if b.buckets != nil {
+		b.buckets[string(key)] = child
+	}
+
+	return child, nil
+	//return b.Bucket(key), nil
 }
 
 // CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.

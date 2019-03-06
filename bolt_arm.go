@@ -21,6 +21,7 @@ func init() {
 
 	// See http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.faqs/ka15414.html
 
+	// TODO raw的取值很讲究，是对称的，这样是因为不管cpu是大端还是小端，结果都一样
 	raw := [6]byte{0xfe, 0xef, 0x11, 0x22, 0x22, 0x11}
 	val := *(*uint32)(unsafe.Pointer(uintptr(unsafe.Pointer(&raw)) + 2))
 

@@ -840,6 +840,7 @@ func (db *DB) meta() *meta {
 }
 
 // allocate returns a contiguous block of memory starting at a given page.
+// 分配count页，count == 1 从pagepool中获取，count > 1 从内存申请。
 func (db *DB) allocate(count int) (*page, error) {
 	// Allocate a temporary buffer for the page.
 	var buf []byte

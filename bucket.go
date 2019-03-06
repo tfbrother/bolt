@@ -103,7 +103,7 @@ func (b *Bucket) Cursor() *Cursor {
 // Bucket retrieves a nested bucket by name.
 // Returns nil if the bucket does not exist.
 // The bucket instance is only valid for the lifetime of the transaction.
-// 已有Bucket下创建Bucket
+// 获取子Bucket(该Bucket已经存在，但是可能还没有被加载进内存)
 func (b *Bucket) Bucket(name []byte) *Bucket {
 	if b.buckets != nil {
 		if child := b.buckets[string(name)]; child != nil {
@@ -121,6 +121,7 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 	}
 
 	// Otherwise create a bucket and cache it.
+	// 加载一个Bucket到内存
 	var child = b.openBucket(v)
 	if b.buckets != nil {
 		b.buckets[string(name)] = child
@@ -136,22 +137,33 @@ func (b *Bucket) openBucket(value []byte) *Bucket {
 
 	// If unaligned load/stores are broken on this arch and value is
 	// unaligned simply clone to an aligned byte array.
+	// TODO https://github.com/boltdb/bolt/pull/578
+	// http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.faqs/ka15414.html
+	// https://blog.csdn.net/jiantiantian/article/details/3540948 数据对齐，指针对齐
+	// 是否支持非对齐访问，
+	// uintptr(unsafe.Pointer(&value[0]))&3 == 0 时，表面最后两位都是0，即是按照4字节对齐的
+	// brokenUnaligned: 没有对齐时，会产生broken错误。
 	unaligned := brokenUnaligned && uintptr(unsafe.Pointer(&value[0]))&3 != 0
 
+	// 需要处理没有对齐
 	if unaligned {
 		value = cloneBytes(value)
 	}
 
 	// If this is a writable transaction then we need to copy the bucket entry.
 	// Read-only transactions can point directly at the mmap entry.
+	// 如果是可写的事务，则需要复制一份bucket的实体，如果是只读的事务则可以直接指向mmap中的实体
 	if b.tx.writable && !unaligned {
 		child.bucket = &bucket{}
+		// 复制了一份数据
 		*child.bucket = *(*bucket)(unsafe.Pointer(&value[0]))
 	} else {
+		// 如果unaligned，在上面代码中value值会被复制一份，否则value的来源是直接从mmap中来的，看外层调用即可知道。
 		child.bucket = (*bucket)(unsafe.Pointer(&value[0]))
 	}
 
 	// Save a reference to the inline page if the bucket is inline.
+	// 等价于child.bucket.root == 0，说明是inline page
 	if child.root == 0 {
 		child.page = (*page)(unsafe.Pointer(&value[bucketHeaderSize]))
 	}
@@ -162,7 +174,7 @@ func (b *Bucket) openBucket(value []byte) *Bucket {
 // CreateBucket creates a new bucket at the given key and returns the new bucket.
 // Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
 // The bucket instance is only valid for the lifetime of the transaction.
-// 在root Bucket下创建Bucket
+// 创建Bucket
 func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	if b.tx.db == nil {
 		return nil, ErrTxClosed
@@ -193,7 +205,7 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	var value = bucket.write()
 
 	// Insert into node.
-	// 对key进行深度拷贝以防它引用的byte slice被回收
+	// 对key进行深度拷贝以防被外层修改污染
 	key = cloneBytes(key)
 	// 往对应的位置处插入一个key/value对
 	c.node().put(key, key, value, 0, bucketLeafFlag)
@@ -203,6 +215,13 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	// to be treated as a regular, non-inline bucket for the rest of the tx.
 	b.page = nil
 
+	// TODO 此处已经知道value，但是在Bucket函数中又去搜索了一次B+树获取value值，是不是有多余啊？可否换成如下代码？
+	// var child = b.openBucket(v)
+	//	if b.buckets != nil {
+	//		b.buckets[string(name)] = child
+	//	}
+	//
+	//	return child, nil
 	return b.Bucket(key), nil
 }
 
@@ -637,6 +656,7 @@ func (b *Bucket) write() []byte {
 }
 
 // rebalance attempts to balance all nodes.
+// Bucket中的有删除操作的节点进行再平衡;
 func (b *Bucket) rebalance() {
 	for _, n := range b.nodes {
 		n.rebalance()

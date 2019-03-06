@@ -152,6 +152,7 @@ func (tx *Tx) Commit() error {
 	// TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
 
 	// Rebalance nodes which have had deletions.
+	// 从根开始对有删除操作的节点进行再平衡;
 	var startTime = time.Now()
 	tx.root.rebalance()
 	if tx.stats.Rebalance > 0 {
@@ -159,6 +160,7 @@ func (tx *Tx) Commit() error {
 	}
 
 	// spill data onto dirty pages.
+	// 从根开始，对超限的结点进行分裂
 	startTime = time.Now()
 	if err := tx.root.spill(); err != nil {
 		tx.rollback()
@@ -167,12 +169,14 @@ func (tx *Tx) Commit() error {
 	tx.stats.SpillTime += time.Since(startTime)
 
 	// Free the old root bucket.
+	// 进行再旋转与分裂后，根节点可能发生了变化，因此将根节点的页号更新，且最终会写入DB的meta page;
 	tx.meta.root.root = tx.root.root
 
 	opgid := tx.meta.pgid
 
 	// Free the freelist and allocate new pages for it. This will overestimate
 	// the size of the freelist but not underestimate the size (which would be bad).
+	// 释放freeList page，并为新的freeList page分配页
 	tx.db.freelist.free(tx.meta.txid, tx.db.page(tx.meta.freelist))
 	p, err := tx.allocate((tx.db.freelist.size() / tx.db.pageSize) + 1)
 	if err != nil {
@@ -186,6 +190,7 @@ func (tx *Tx) Commit() error {
 	tx.meta.freelist = p.id
 
 	// If the high water mark has moved up then attempt to grow the database.
+	// 只有当映射入内存的页数增加时，才调用db.grow()来刷新磁盘文件的元数据，并及时更新文件大小信息。
 	if tx.meta.pgid > opgid {
 		if err := tx.db.grow(int(tx.meta.pgid+1) * tx.db.pageSize); err != nil {
 			tx.rollback()
@@ -194,6 +199,7 @@ func (tx *Tx) Commit() error {
 	}
 
 	// Write dirty pages to disk.
+	// tx.write只会向磁盘写入由当前tx分配并写入过的脏页。
 	startTime = time.Now()
 	if err := tx.write(); err != nil {
 		tx.rollback()
@@ -218,6 +224,8 @@ func (tx *Tx) Commit() error {
 	}
 
 	// Write meta to disk.
+	// 将当前tx的meta写入DB的meta页，因为进行读写操作后，meta中的txid已经改变，
+	// root、freelist、pgid也可能已经更新了
 	if err := tx.writeMeta(); err != nil {
 		tx.rollback()
 		return err

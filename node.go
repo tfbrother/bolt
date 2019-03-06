@@ -146,6 +146,7 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 }
 
 // del removes a key from the node.
+// 删除node.inodes[index].key == key的inode
 func (n *node) del(key []byte) {
 	// Find index of key.
 	index := sort.Search(len(n.inodes), func(i int) bool { return bytes.Compare(n.inodes[i].key, key) != -1 })
@@ -255,12 +256,14 @@ func (n *node) write(p *page) {
 
 // split breaks up a node into multiple smaller nodes, if appropriate.
 // This should only be called from the spill() function.
+// 将一个结点分裂成多个结点，当结点不能被分裂是，返回nil
 func (n *node) split(pageSize int) []*node {
 	var nodes []*node
 
 	node := n
 	for {
 		// Split node into two.
+		// 第一个结点满足条件，第二个结点会被再次调用进行分裂成两个结点
 		a, b := node.splitTwo(pageSize)
 		nodes = append(nodes, a)
 
@@ -278,6 +281,7 @@ func (n *node) split(pageSize int) []*node {
 
 // splitTwo breaks up a node into two smaller nodes, if appropriate.
 // This should only be called from the split() function.
+// 将一个结点分裂成两个结点
 func (n *node) splitTwo(pageSize int) (*node, *node) {
 	// Ignore the split if the page doesn't have at least enough nodes for
 	// two pages or if the nodes can fit in a single page.
@@ -295,6 +299,7 @@ func (n *node) splitTwo(pageSize int) (*node, *node) {
 	threshold := int(float64(pageSize) * fillPercent)
 
 	// Determine split position and sizes of the two pages.
+	// 计算分裂的索引
 	splitIndex, _ := n.splitIndex(threshold)
 
 	// Split node into two separate nodes.
@@ -320,6 +325,7 @@ func (n *node) splitTwo(pageSize int) (*node, *node) {
 // splitIndex finds the position where a page will fill a given threshold.
 // It returns the index as well as the size of the first page.
 // This is only be called from split().
+// 计算分裂的索引
 func (n *node) splitIndex(threshold int) (index, sz int) {
 	sz = pageHeaderSize
 
@@ -364,6 +370,7 @@ func (n *node) spill() error {
 	n.children = nil
 
 	// Split nodes into appropriate sizes. The first node will always be n.
+	// 如果n不能被split，nodes就会为nil。
 	var nodes = n.split(tx.db.pageSize)
 	for _, node := range nodes {
 		// Add node's page to the freelist if it's not new.
@@ -404,6 +411,8 @@ func (n *node) spill() error {
 
 	// If the root node split and created a new root then we need to spill that
 	// as well. We'll clear out the children to make sure it doesn't try to respill.
+	// 从根节点处递归完所有子节点的spill过程后，若根节点需要分裂，则它分裂后将产生新的根节点，
+	// 因此需要对新产生的根节点进行spill;
 	if n.parent != nil && n.parent.pgid == 0 {
 		n.children = nil
 		return n.parent.spill()
@@ -415,6 +424,7 @@ func (n *node) spill() error {
 // rebalance attempts to combine the node with sibling nodes if the node fill
 // size is below a threshold or if there are not enough keys.
 func (n *node) rebalance() {
+	// 只有当节点中有过删除操作时，unbalanced才为true;
 	if !n.unbalanced {
 		return
 	}
@@ -424,14 +434,18 @@ func (n *node) rebalance() {
 	n.bucket.tx.stats.Rebalance++
 
 	// Ignore if node is above threshold (25%) and has enough keys.
+	// 只有当节点存的K/V总大小小于页大小的25%且节点中Key的数量少于设定的每节点Key数量最小值时，才会进行再平衡;
 	var threshold = n.bucket.tx.db.pageSize / 4
 	if n.size() > threshold && len(n.inodes) > n.minKeys() {
 		return
 	}
 
 	// Root node has special handling.
+	// 只有根节点才有n.parent == nil
 	if n.parent == nil {
 		// If root node is a branch and only has one node then collapse it.
+		// 根节点只有一个子节点的情形:只能向上合并
+		// 将子节点上的inodes拷贝到根节点上，并将子节点的所有孩子移交给根节点，并将孩子节点的父节点更新为根节点；
 		if !n.isLeaf && len(n.inodes) == 1 {
 			// Move root's child up.
 			child := n.bucket.node(n.inodes[0].pgid, n)
@@ -441,6 +455,7 @@ func (n *node) rebalance() {
 
 			// Reparent all child nodes being moved.
 			for _, inode := range n.inodes {
+				// TODO 上面也有一个child变量，难道此child的作用域只在for循环内？是的
 				if child, ok := n.bucket.nodes[inode.pgid]; ok {
 					child.parent = n
 				}
@@ -456,10 +471,15 @@ func (n *node) rebalance() {
 	}
 
 	// If node has no keys then just remove it.
+	// 如果节点变成一个空节点，则将它从B+Tree中删除，并把父节点上的Key和Pointer删除，由于父节点上有删除，得对父节点进行再平衡;
 	if n.numChildren() == 0 {
+		// 删除n.parent.inodes中对应的inode
 		n.parent.del(n.key)
+		// 删除n.parent.children中对应的缓存node
 		n.parent.removeChild(n)
+		// 删除n.bucket.nodes中对应的缓存node
 		delete(n.bucket.nodes, n.pgid)
+		// 将n所在的页标记为free
 		n.free()
 		n.parent.rebalance()
 		return
@@ -468,6 +488,9 @@ func (n *node) rebalance() {
 	_assert(n.parent.numChildren() > 1, "parent must have at least 2 children")
 
 	// Destination node is right sibling if idx == 0, otherwise left sibling.
+	// 决定是合并左节点还是右节点：
+	// 	1.如果当前节点是父节点的第一个孩子，则将右节点中的记录合并到当前节点中；
+	// 	2.如果当前节点是父节点的第二个或以上的节点，则将当前节点中的记录合并到左节点中;
 	var target *node
 	var useNextSibling = (n.parent.childIndex(n) == 0)
 	if useNextSibling {
@@ -477,6 +500,10 @@ func (n *node) rebalance() {
 	}
 
 	// If both this node and the target node are too small then merge them.
+	// 右节点中记录合并到当前节点:
+	// 	1.首先将右节点的孩子节点全部变成当前节点的孩子，右节点将所有孩子移除；
+	// 	2.随后，将右节点中的记录全部拷贝到当前节点；
+	// 	3.最后，将右节点从B+Tree中移除，并将父节点中与右节点对应的记录删除;
 	if useNextSibling {
 		// Reparent all child nodes being moved.
 		for _, inode := range target.inodes {
@@ -493,7 +520,7 @@ func (n *node) rebalance() {
 		n.parent.removeChild(target)
 		delete(n.bucket.nodes, target.pgid)
 		target.free()
-	} else {
+	} else { // 将当前节点中的记录合并到左节点
 		// Reparent all child nodes being moved.
 		for _, inode := range n.inodes {
 			if child, ok := n.bucket.nodes[inode.pgid]; ok {
@@ -512,6 +539,8 @@ func (n *node) rebalance() {
 	}
 
 	// Either this node or the target node was deleted from the parent so rebalance it.
+	// 合并兄弟节点与当前节点时，会移除一个节点并从父节点中删除一个记录，
+	// 所以需要对父节点进行再平衡(节点的rebalance也是一个递归的过程，它会从当前结点一直进行到根节点处）
 	n.parent.rebalance()
 }
 

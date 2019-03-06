@@ -11,7 +11,7 @@ import (
 type freelist struct {
 	ids     []pgid          // all free and available free page ids.
 	pending map[txid][]pgid // mapping of soon-to-be free page ids by tx.
-	cache   map[pgid]bool   // fast lookup of all free and pending page ids.
+	cache   map[pgid]bool   // fast lookup of all free and pending page ids.包含ids和pending
 }
 
 // newFreelist returns an empty, initialized freelist.
@@ -64,6 +64,7 @@ func (f *freelist) copyall(dst []pgid) {
 
 // allocate returns the starting page id of a contiguous list of pages of a given size.
 // If a contiguous block cannot be found then 0 is returned.
+// 申请n个连续的空闲页id，返回0表示失败
 func (f *freelist) allocate(n int) pgid {
 	if len(f.ids) == 0 {
 		return 0
@@ -108,6 +109,7 @@ func (f *freelist) allocate(n int) pgid {
 
 // free releases a page and its overflow for a given transaction id.
 // If the page is already free then a panic will occur.
+// 将p free到txid的pending里面去
 func (f *freelist) free(txid txid, p *page) {
 	if p.id <= 1 {
 		panic(fmt.Sprintf("cannot free page 0 or 1: %d", p.id))
@@ -202,9 +204,11 @@ func (f *freelist) write(p *page) error {
 	} else if lenids < 0xFFFF {
 		p.count = uint16(lenids)
 		f.copyall(((*[maxAllocSize]pgid)(unsafe.Pointer(&p.ptr)))[:])
-	} else {
+	} else { // count超过uint16了，即一页存不下了
 		p.count = 0xFFFF
+		// 第0个位置存空页的总数
 		((*[maxAllocSize]pgid)(unsafe.Pointer(&p.ptr)))[0] = pgid(lenids)
+		// 第一个以及以后的位置，存具体空闲的页索引，会跨页
 		f.copyall(((*[maxAllocSize]pgid)(unsafe.Pointer(&p.ptr)))[1:])
 	}
 

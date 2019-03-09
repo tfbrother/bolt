@@ -493,6 +493,7 @@ func (tx *Tx) write() error {
 	}
 	// Clear out page cache early.
 	tx.pages = make(map[pgid]*page)
+	// 对页按其pgid排序，保证在随后按页顺序写文件，一定程度上提高写文件效率;
 	sort.Sort(pages)
 
 	// Write pages to disk in order.
@@ -512,6 +513,7 @@ func (tx *Tx) write() error {
 
 			// Write chunk to disk.
 			buf := ptr[:sz]
+			// 通过fwrite系统调用写文件;
 			if _, err := tx.db.ops.writeAt(buf, offset); err != nil {
 				return err
 			}
@@ -533,6 +535,7 @@ func (tx *Tx) write() error {
 
 	// Ignore file sync if flag is set on DB.
 	if !tx.db.NoSync || IgnoreNoSync {
+		// 通过fdatasync将磁盘缓冲写入磁盘。
 		if err := fdatasync(tx.db); err != nil {
 			return err
 		}
@@ -560,6 +563,7 @@ func (tx *Tx) write() error {
 }
 
 // writeMeta writes the meta to the disk.
+// 先向临时分配的页缓存写入序列化后的meta页，然后通过fwrite和fdatesync系统调用将其写入DB的meta page。
 func (tx *Tx) writeMeta() error {
 	// Create a temporary buffer for the meta page.
 	buf := make([]byte, tx.db.pageSize)

@@ -846,6 +846,8 @@ func (db *DB) meta() *meta {
 // 分配count页，count == 1 从pagepool中获取，count > 1 从内存申请。
 func (db *DB) allocate(count int) (*page, error) {
 	// Allocate a temporary buffer for the page.
+	// 首先分配所需的缓存。这里有一个优化措施: 如果只需要一页缓存的话，并不直接进行内存分配，而是通过Go中的Pool缓冲池来分配，
+	// 以减小分配内存带来的时间开销。tx.write()中向磁盘写入脏页后，会将所有只占一个页框的脏页清空，并放入Pool缓冲池;
 	var buf []byte
 	if count == 1 {
 		buf = db.pagePool.Get().([]byte)
@@ -856,13 +858,19 @@ func (db *DB) allocate(count int) (*page, error) {
 	p.overflow = uint32(count - 1)
 
 	// Use pages from the freelist if they are available.
+	// 从freeList查看有没有可用的页号，如果有则分配给刚刚申请到的页缓存，并返回；
 	if p.id = db.freelist.allocate(count); p.id != 0 {
 		return p, nil
 	}
 
 	// Resize mmap() if we're at the end.
+	// 如果freeList中没有可用的页号，则说明当前映射入内存的文件段没有空闲页，需要增大文件映射范围;
 	p.id = db.rwtx.meta.pgid
 	var minsz = int((p.id+pgid(count))+1) * db.pageSize
+	// 如果需要的页数大于已经映射到内存的文件总页数，则触发remmap，将映射区域扩大到写入文件后新的文件内容结尾处。
+	// 我们前面介绍db.mmaplock的时候说过，读写transaction在remmap时，需要等待所有已经open的只读transaction结束，
+	// 从这里我们知道，如果打开DB文件时，设定的初始文件映射长度足够长，可以减少读写transaction需要remmap的概率，
+	// 从而降低读写transaction被阻塞的概率，提高读写并发;
 	if minsz >= db.datasz {
 		if err := db.mmap(minsz); err != nil {
 			return nil, fmt.Errorf("mmap allocate error: %s", err)
@@ -870,6 +878,7 @@ func (db *DB) allocate(count int) (*page, error) {
 	}
 
 	// Move the page id high water mark.
+	// 让meta.pgid指向新的文件内容结尾处;
 	db.rwtx.meta.pgid += pgid(count)
 
 	return p, nil

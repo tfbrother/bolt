@@ -254,7 +254,7 @@ func (n *node) write(p *page) {
 
 // split breaks up a node into multiple smaller nodes, if appropriate.
 // This should only be called from the spill() function.
-// 将一个结点分裂成多个结点，当结点不能被分裂是，返回nil
+// 实际上就是把node分成两段，其中一段满足node要求的大小，另一段再进一步按相同规则分成两段，一直到不能再分为止。
 func (n *node) split(pageSize int) []*node {
 	var nodes []*node
 
@@ -283,6 +283,9 @@ func (n *node) split(pageSize int) []*node {
 func (n *node) splitTwo(pageSize int) (*node, *node) {
 	// Ignore the split if the page doesn't have at least enough nodes for
 	// two pages or if the nodes can fit in a single page.
+	// 节点分裂的条件:
+	// 1) 节点大小超过了页大小， 且
+	// 2) 节点Key个数大于每节点Key数量最小值的两倍，这是为了保证分裂出的两个节点中的Key数量都大于每节点Key数量的最小值;
 	if len(n.inodes) <= (minKeysPerPage*2) || n.sizeLessThan(pageSize) {
 		return n, nil
 	}
@@ -294,24 +297,29 @@ func (n *node) splitTwo(pageSize int) (*node, *node) {
 	} else if fillPercent > maxFillPercent {
 		fillPercent = maxFillPercent
 	}
+	// 决定分裂的门限值，即页大小 x 填充率;
 	threshold := int(float64(pageSize) * fillPercent)
 
 	// Determine split position and sizes of the two pages.
-	// 计算分裂的索引
+	// 计算分裂的位置
 	splitIndex, _ := n.splitIndex(threshold)
 
 	// Split node into two separate nodes.
 	// If there's no parent then we'll need to create one.
+	// 如果要分裂的节点没有父节点(可能是根节点)，则应该新建一个父node，同时将当前节点设为它的子node;
 	if n.parent == nil {
 		n.parent = &node{bucket: n.bucket, children: []*node{n}}
 	}
 
 	// Create a new node and add it to the parent.
+	// 创建了一个新node，并将当前node的父节点设为它的父节点;
 	next := &node{bucket: n.bucket, isLeaf: n.isLeaf, parent: n.parent}
 	n.parent.children = append(n.parent.children, next)
 
 	// Split inodes across two nodes.
+	// 将当前node的从分裂位置开始的右半部分记录拷贝给新node;
 	next.inodes = n.inodes[splitIndex:]
+	//将当前node的记录更新为原记录集合从分裂位置开始的左半部分，从而实现了将当前node一分为二;
 	n.inodes = n.inodes[:splitIndex]
 
 	// Update the statistics.
@@ -357,6 +365,9 @@ func (n *node) spill() error {
 	// Spill child nodes first. Child nodes can materialize sibling nodes in
 	// the case of split-merge so we cannot use a range loop. We have to check
 	// the children size on every loop iteration.
+	// 子节点进行深度优先访问并递归调用spill()，需要注意的是，子节点可能会分裂成多个节点，分裂出来的新节点也是当前节点的子节点，
+	// n.children这个slice的size会在循环中变化，所以不能使用rang的方式循环访问；同时，分裂出来的新节点会在后面代码处被设为spilled，
+	// 所以在下一次循环访问到新的子节点时不会重新spill，这也是上面对spilled进行检查的原因;
 	sort.Sort(n.children)
 	for i := 0; i < len(n.children); i++ {
 		if err := n.children[i].spill(); err != nil {
@@ -365,21 +376,26 @@ func (n *node) spill() error {
 	}
 
 	// We no longer need the child list because it's only used for spill tracking.
+	//当所有子节点spill完成后，将子节点引用集合children置为空，以防向上递归调用spill的时候形成回路;
 	n.children = nil
 
 	// Split nodes into appropriate sizes. The first node will always be n.
 	// 如果n不能被split，nodes就会为[]*node{n}
 	// TODO 当nodes == []*node{n} 这种特殊情况出现的时候，会不会出现异常？
+	// 调用node的split()方法按页大小将node分裂出若干新node，新node与当前node共享同一个父node，返回的nodes中包含当前node;
 	var nodes = n.split(tx.db.pageSize)
 	for _, node := range nodes {
 		// Add node's page to the freelist if it's not new.
+		// 释放当前node的所占页，因为随后要为它分配新的页，我们前面说过tx commit是只会向磁盘写入当前tx分配的脏页，
+		// 所以这里要对当前node重新分配页;
 		if node.pgid > 0 {
 			tx.db.freelist.free(tx.meta.txid, tx.page(node.pgid))
 			node.pgid = 0
 		}
 
 		// Allocate contiguous space for the node.
-		// 分配全新page来写回node内容
+		// 调用Tx的allocate()方法为分裂产生的node分配页缓存，请注意，通过splite()方法分裂node后，node的大小为页大小 * 填充率，
+		// 默认填充率为50%，而且一般地它的值小于100%，所以这里为每个node实际上是分配一个页框;
 		p, err := tx.allocate((node.size() / tx.db.pageSize) + 1)
 		if err != nil {
 			return err
@@ -389,6 +405,7 @@ func (n *node) spill() error {
 		if p.id >= tx.meta.pgid {
 			panic(fmt.Sprintf("pgid (%d) above high water mark (%d)", p.id, tx.meta.pgid))
 		}
+		// 将新node的页号设为分配给他的页框的页号，同时将新node序列化并写入刚刚分配的页缓存;
 		node.pgid = p.id
 		node.write(p)
 		node.spilled = true
@@ -401,7 +418,9 @@ func (n *node) spill() error {
 			}
 
 			// TODO value=nil,分支结点保存的是索引，不保存值，flags是0
+			// 向父节点更新或添加Key和Pointer，以指向分裂产生的新node。
 			node.parent.put(key, node.inodes[0].key, nil, node.pgid, 0)
+			// 将父node的key设为第一个子node的第一个key;
 			node.key = node.inodes[0].key
 			_assert(len(node.key) > 0, "spill: zero-length node key")
 		}
@@ -426,6 +445,7 @@ func (n *node) spill() error {
 
 // rebalance attempts to combine the node with sibling nodes if the node fill
 // size is below a threshold or if there are not enough keys.
+// 节点的rebalance也是一个递归的过程，它会从当前结点一直进行到根节点处;
 func (n *node) rebalance() {
 	// 只有当节点中有过删除操作时，unbalanced才为true;
 	if !n.unbalanced {

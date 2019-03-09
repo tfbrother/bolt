@@ -559,10 +559,15 @@ func (b *Bucket) _forEachPageNode(pgid pgid, depth int, fn func(*page, *node, in
 // spill writes all the nodes for this bucket to dirty pages.
 func (b *Bucket) spill() error {
 	// Spill all child buckets first.
+	// 对Bucket树的子Bucket进行深度优先访问并递归调用spill()。
 	for name, child := range b.buckets {
 		// If the child bucket is small enough and it has no child buckets then
 		// write it inline into the parent bucket's page. Otherwise spill it
 		// like a normal bucket and make the parent value a pointer to the page.
+		// 子Bucket不满足inlineable()条件时，如果子Bucket原来是一个内置Bucket，则它将通过spill()变成一个普通的Bucket，
+		// 即它的B+Tree有一个根节点和至少两个叶子节点；如果子Bucket原本是一个普通Bucket，则spill()可能会更新它的根节点。
+		// 一个普通的子Bucket的Value只保存了Bucket的头部。相反地，如果一个普通的子Bucket由于K/V记录减少而满足了inlineable()
+		// 条件时，它将变成一个内置Bucket，即它的B+Tree只有一个根节点，并将根节点上的所有inodes作为Value写入父Bucket;
 		var value []byte
 		if child.inlineable() {
 			child.free()
@@ -579,6 +584,7 @@ func (b *Bucket) spill() error {
 		}
 
 		// Skip writing the bucket if there are no materialized nodes.
+		// TODO 为何此处还要进行这个检查？child在进行spill后，可能变成inline Bucket了
 		if child.rootNode == nil {
 			continue
 		}
@@ -592,24 +598,30 @@ func (b *Bucket) spill() error {
 		if flags&bucketLeafFlag == 0 {
 			panic(fmt.Sprintf("unexpected bucket header flag: %x", flags))
 		}
+		// 将子Bucket的新的Value更新到父Bucket中;
 		c.node().put([]byte(name), []byte(name), value, 0, bucketLeafFlag)
 	}
 
 	// Ignore if there's not a materialized root node.
+	// inline Bucket不需要进行rebalance
 	if b.rootNode == nil {
 		return nil
 	}
 
 	// Spill nodes.
+	// 更新完子Bucket后，就开始spill自己，从当前Bucket的根节点处开始spill。在递归的最内层调用中，访问到了Bucket树的
+	// 某个(逻辑)叶子Bucket，由于它没有子Bucket，将直接从其根节开始spill;
 	if err := b.rootNode.spill(); err != nil {
 		return err
 	}
+	// Bucket spill完后，其根节点可能有变化，所以要更新根节点引用;
 	b.rootNode = b.rootNode.root()
 
 	// Update the root node for this bucket.
 	if b.rootNode.pgid >= b.tx.meta.pgid {
 		panic(fmt.Sprintf("pgid (%d) above high water mark (%d)", b.rootNode.pgid, b.tx.meta.pgid))
 	}
+	// 更新Bucket头中的根节点页号;
 	b.root = b.rootNode.pgid
 
 	return nil
@@ -618,6 +630,8 @@ func (b *Bucket) spill() error {
 // inlineable returns true if a bucket is small enough to be written inline
 // and if it contains no subbuckets. Otherwise returns false.
 // 判断一个Bucket是否足够小可以变成inline的，如果该Bucket下面有子Bucket，那么是不能inline的
+// 如果一个Bucket本身就是inline的，则返回false，因为不需要在外层再被inline了
+// 即只有当Bucket只有一个叶子节点(即其根节点)且它序列化后的大小小于页大小的25%时才能成为内置Bucket。
 func (b *Bucket) inlineable() bool {
 	var n = b.rootNode
 

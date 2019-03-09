@@ -13,13 +13,11 @@ type node struct {
 	isLeaf     bool // 标记该节点是否为叶子节点，决定inode中记录的是什么
 	unbalanced bool // 当该node上有删除操作时，标记为true，当Tx执行Commit时，会执行rebalance，将inode重新排列
 	spilled    bool
-	// 当加载page变成node缓存时，将该node下边界inode[0]的key缓存在node上，
-	// 用于在parent node 查找本身时使用
-	key      []byte
-	pgid     pgid
-	parent   *node
-	children nodes
-	inodes   inodes
+	key        []byte // 当加载page变成node缓存时，将下边界inode[0]的key缓存在node上，用于在parent node 查找本身时使用
+	pgid       pgid
+	parent     *node // Bucket的rootNode.parent == nil
+	children   nodes // children记录通过node访问过的子node，还包含rebalance/spill过程中增加的子node
+	inodes     inodes
 }
 
 // root returns the top-level node this node is attached to.
@@ -370,7 +368,8 @@ func (n *node) spill() error {
 	n.children = nil
 
 	// Split nodes into appropriate sizes. The first node will always be n.
-	// 如果n不能被split，nodes就会为nil。
+	// 如果n不能被split，nodes就会为[]*node{n}
+	// TODO 当nodes == []*node{n} 这种特殊情况出现的时候，会不会出现异常？
 	var nodes = n.split(tx.db.pageSize)
 	for _, node := range nodes {
 		// Add node's page to the freelist if it's not new.
@@ -380,6 +379,7 @@ func (n *node) spill() error {
 		}
 
 		// Allocate contiguous space for the node.
+		// 分配全新page来写回node内容
 		p, err := tx.allocate((node.size() / tx.db.pageSize) + 1)
 		if err != nil {
 			return err
@@ -400,6 +400,7 @@ func (n *node) spill() error {
 				key = node.inodes[0].key
 			}
 
+			// TODO value=nil,分支结点保存的是索引，不保存值，flags是0
 			node.parent.put(key, node.inodes[0].key, nil, node.pgid, 0)
 			node.key = node.inodes[0].key
 			_assert(len(node.key) > 0, "spill: zero-length node key")
@@ -413,6 +414,8 @@ func (n *node) spill() error {
 	// as well. We'll clear out the children to make sure it doesn't try to respill.
 	// 从根节点处递归完所有子节点的spill过程后，若根节点需要分裂，则它分裂后将产生新的根节点，
 	// 因此需要对新产生的根节点进行spill;
+	// TODO 上面是递归children[i].spill()，此处又parent.spill()，是否可能存在死循环的情况？
+	// 或者同一个结点多次被spill的情况？
 	if n.parent != nil && n.parent.pgid == 0 {
 		n.children = nil
 		return n.parent.spill()
@@ -441,7 +444,7 @@ func (n *node) rebalance() {
 	}
 
 	// Root node has special handling.
-	// 只有根节点才有n.parent == nil
+	// 只有根节点Bucket.rootNode有n.parent == nil，每个Bucket都有一个rootNode
 	if n.parent == nil {
 		// If root node is a branch and only has one node then collapse it.
 		// 根节点只有一个子节点的情形:只能向上合并
@@ -454,6 +457,7 @@ func (n *node) rebalance() {
 			n.children = child.children
 
 			// Reparent all child nodes being moved.
+			// 为何没有递归的子结点进行rebalance呢
 			for _, inode := range n.inodes {
 				// TODO 上面也有一个child变量，难道此child的作用域只在for循环内？是的
 				if child, ok := n.bucket.nodes[inode.pgid]; ok {
@@ -465,6 +469,9 @@ func (n *node) rebalance() {
 			child.parent = nil
 			delete(n.bucket.nodes, child.pgid)
 			child.free()
+		} else {
+			// do nothing
+			// TODO B+树的性质：根节点的下界是拥有两个子结点则不用进行rebalance。
 		}
 
 		return
@@ -485,6 +492,7 @@ func (n *node) rebalance() {
 		return
 	}
 
+	// TODO 为何此处要这样检查呢？
 	_assert(n.parent.numChildren() > 1, "parent must have at least 2 children")
 
 	// Destination node is right sibling if idx == 0, otherwise left sibling.
@@ -507,6 +515,7 @@ func (n *node) rebalance() {
 	if useNextSibling {
 		// Reparent all child nodes being moved.
 		for _, inode := range target.inodes {
+			// TODO 如果inode.pgid没有缓存在bucket.nodes下面就不处理？？不会有逻辑问题？？？
 			if child, ok := n.bucket.nodes[inode.pgid]; ok {
 				child.parent.removeChild(child)
 				child.parent = n

@@ -72,6 +72,7 @@ func (p *page) leafPageElements() []leafPageElement {
 	if p.count == 0 {
 		return nil
 	}
+	// TODO 为何不用((*[]leafPageElement)(unsafe.Pointer(&p.ptr)))呢？？
 	return ((*[0x7FFFFFF]leafPageElement)(unsafe.Pointer(&p.ptr)))[:]
 }
 

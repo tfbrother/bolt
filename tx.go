@@ -22,11 +22,13 @@ type txid uint64
 // are using them. A long running read transaction can cause the database to
 // quickly grow.
 type Tx struct {
-	writable       bool
-	managed        bool
-	db             *DB
-	meta           *meta
-	root           Bucket
+	writable bool
+	managed  bool // 用于标记该事务是否能被提交和回滚，true表示不能，false表示能，具体可以看db.Update().
+	db       *DB
+	meta     *meta // 复制一份db.meta，对meta的修改都操作在该副本上，最后提交的时候就提交该副本(COW)
+	root     Bucket
+	// 缓存的是当前事务所有新建的页，在提交事务时就会把这部分page持久化到文件去。
+	// 只在Tx.allocate()方法中会更新该属性
 	pages          map[pgid]*page
 	stats          TxStats
 	commitHandlers []func()
@@ -260,6 +262,8 @@ func (tx *Tx) rollback() {
 	}
 	if tx.writable {
 		tx.db.freelist.rollback(tx.meta.txid)
+		// TODO 为何此处不直接用tx.meta.freelist呢？因为执行rollback()时可能是Commit到一半的过程中出错导致的
+		// 回滚，此时tx.meta.freelist可能已经被修改了(具体看Commit代码)，所以必须从db中去重新获取
 		tx.db.freelist.reload(tx.db.page(tx.db.meta().freelist))
 	}
 	tx.close()
@@ -462,6 +466,7 @@ func (tx *Tx) checkBucket(b *Bucket, reachable map[pgid]*page, freed map[pgid]bo
 }
 
 // allocate returns a contiguous block of memory starting at a given page.
+// 分配页，通过事务来分配，就可以记录该事务下面所有分配的页，这样在提交事务的时候方便持久化这些页
 func (tx *Tx) allocate(count int) (*page, error) {
 	p, err := tx.db.allocate(count)
 	if err != nil {
@@ -479,6 +484,7 @@ func (tx *Tx) allocate(count int) (*page, error) {
 }
 
 // write writes any dirty pages to disk.
+// 持久化脏页到硬盘
 func (tx *Tx) write() error {
 	// Sort pages by id.
 	pages := make(pages, 0, len(tx.pages))
@@ -490,6 +496,7 @@ func (tx *Tx) write() error {
 	sort.Sort(pages)
 
 	// Write pages to disk in order.
+	// 将pages顺序的写入硬盘
 	for _, p := range pages {
 		size := (int(p.overflow) + 1) * tx.db.pageSize
 		offset := int64(p.id) * int64(tx.db.pageSize)
@@ -542,6 +549,7 @@ func (tx *Tx) write() error {
 		buf := (*[maxAllocSize]byte)(unsafe.Pointer(p))[:tx.db.pageSize]
 
 		// See https://go.googlesource.com/go/+/f03c9202c43e0abb130669852082117ca50aa9b1
+		// TODO 放回缓存池之前清空page的内容
 		for i := range buf {
 			buf[i] = 0
 		}

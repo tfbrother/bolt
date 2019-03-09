@@ -53,6 +53,7 @@ func (f *freelist) pending_count() int {
 
 // copyall copies into dst a list of all free ids and all pending ids in one sorted list.
 // f.count returns the minimum length required for dst.
+// 将freelist下面所有空闲页的pageid(ids和pending)存在dst中去
 func (f *freelist) copyall(dst []pgid) {
 	m := make(pgids, 0, f.pending_count())
 	for _, list := range f.pending {
@@ -65,6 +66,7 @@ func (f *freelist) copyall(dst []pgid) {
 // allocate returns the starting page id of a contiguous list of pages of a given size.
 // If a contiguous block cannot be found then 0 is returned.
 // 申请n个连续的空闲页id，返回0表示失败
+// 主要是实现算法：在一个排序的id数组中，找到n个连续数字id
 func (f *freelist) allocate(n int) pgid {
 	if len(f.ids) == 0 {
 		return 0
@@ -76,7 +78,7 @@ func (f *freelist) allocate(n int) pgid {
 			panic(fmt.Sprintf("invalid page allocation: %d", id))
 		}
 
-		// Reset initial page if this is not contiguous.
+		// Reset initial page if this is not contiguous(连续的).
 		if previd == 0 || id-previd != 1 {
 			initial = id
 		}
@@ -131,6 +133,7 @@ func (f *freelist) free(txid txid, p *page) {
 }
 
 // release moves all page ids for a transaction id (or older) to the freelist.
+// 将该事务下面所有的pengding page放到ids里面去
 func (f *freelist) release(txid txid) {
 	m := make(pgids, 0)
 	for tid, ids := range f.pending {
@@ -146,6 +149,7 @@ func (f *freelist) release(txid txid) {
 }
 
 // rollback removes the pages from a given pending tx.
+// 回滚事务：主要就是把该事务下面所有的pending page删除(从pending和cache中)
 func (f *freelist) rollback(txid txid) {
 	// Remove page ids from cache.
 	for _, id := range f.pending[txid] {
@@ -157,17 +161,20 @@ func (f *freelist) rollback(txid txid) {
 }
 
 // freed returns whether a given page is in the free list.
+// 判断一个page是否是free的
 func (f *freelist) freed(pgid pgid) bool {
 	return f.cache[pgid]
 }
 
 // read initializes the freelist from a freelist page.
+// 从一个page中初始化freelist，主要用于db初始化和事务回滚时。
 func (f *freelist) read(p *page) {
 	// If the page.count is at the max uint16 value (64k) then it's considered
 	// an overflow and the size of the freelist is stored as the first element.
 	idx, count := 0, int(p.count)
 	if count == 0xFFFF {
 		idx = 1
+		// freelist有跨页，此时索引0的位置保存的就是空页的数量
 		count = int(((*[maxAllocSize]pgid)(unsafe.Pointer(&p.ptr)))[0])
 	}
 
@@ -184,12 +191,14 @@ func (f *freelist) read(p *page) {
 	}
 
 	// Rebuild the page cache.
+	// 重新索引page缓存
 	f.reindex()
 }
 
 // write writes the page ids onto a freelist page. All free and pending ids are
 // saved to disk since in the event of a program crash, all pending ids will
 // become free.
+// 把freelist的count以及去重后所有的ids与pending items写到page中
 func (f *freelist) write(p *page) error {
 	// Combine the old free pgids and pgids waiting on an open transaction.
 
@@ -216,6 +225,9 @@ func (f *freelist) write(p *page) error {
 }
 
 // reload reads the freelist from a page and filters out pending items.
+// 从page中加载freelist，但是过滤掉pending items
+// TODO 只在Tx.Rollback()被调用，为何需要排除掉pending items呢？
+// 因为ids和pending在设计上避免有交集
 func (f *freelist) reload(p *page) {
 	f.read(p)
 

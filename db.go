@@ -804,6 +804,9 @@ func (db *DB) Info() *Info {
 // 返回内存映射中对应的page
 func (db *DB) page(id pgid) *page {
 	pos := id * pgid(db.pageSize)
+	// TODO 缺页时操作系统会按照页为单位加载，因此此处会加载4k文件内容进来，然后转换成*page类型
+	// 由于page.ptr 是uintptr类型，因此通过page.ptr就能完整的访问该4k的内容(除去header部分)
+	// 在代码中为了避免page.ptr访问越界，要结合page.count和element size来才行。
 	return (*page)(unsafe.Pointer(&db.data[pos]))
 }
 

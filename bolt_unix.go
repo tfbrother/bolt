@@ -53,6 +53,7 @@ func mmap(db *DB, sz int) error {
 	}
 
 	// Advise the kernel that the mmap is accessed randomly.
+	// 告诉内核，mmap会被随机访问
 	if err := madvise(b, syscall.MADV_RANDOM); err != nil {
 		return fmt.Errorf("madvise: %s", err)
 	}

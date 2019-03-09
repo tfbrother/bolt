@@ -36,12 +36,18 @@ const DefaultFillPercent = 0.5
 // 类似于数据库中的表
 type Bucket struct {
 	*bucket
+	// 事务，每一次对数据库的操作是一次事务，每次事务都是一次探索定位，修改或读取数据过程
 	tx *Tx // the associated transaction
 	// Bucket的孩子Bucket，每个Bucket下可创建子Bucket
-	buckets  map[string]*Bucket // subbucket cache
-	page     *page              // inline page reference
-	rootNode *node              // materialized node for the root page.
-	// 缓存该Bucket下面所有的node
+	// 探索过程中，缓存记录下已经探索过的buckets
+	buckets map[string]*Bucket // subbucket cache
+	// 对于inline Bucket page属性才有值。思考，对于普通的Bucket，是一个B+树，所以通过其rootNode开始进行各项操作，
+	// 对于inline Bucket也需要对其下面的数据进行操作，bolt在设计时，就采用了通过page属性值来对inline Bucket中的数据对进行各项操作。
+	// page属性的初始化在openBucket中
+	page *page // inline page reference
+	// inline Bucket，rootNode == nil，理由bucket.root
+	rootNode *node // materialized node for the root page.
+	// 缓存该Bucket下面所有被访问过的node
 	nodes map[pgid]*node // node cache
 
 	// Sets the threshold for filling nodes when they split. By default,
@@ -57,6 +63,7 @@ type Bucket struct {
 // then its root page can be stored inline in the "value", after the bucket
 // header. In the case of inline buckets, the "root" will be 0.
 type bucket struct {
+	// root==0，则为inline Bucket，其所有数据并没有单独的page来存储，而是作为一个kv对存储在父Bucket的inode里面。
 	root     pgid   // page id of the bucket's root-level page
 	sequence uint64 // monotonically incrementing, used by NextSequence()
 }
@@ -216,6 +223,7 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	b.page = nil
 
 	// TODO 此处已经知道value，但是在Bucket函数中又去搜索了一次B+树获取value值，多余，可换成如下代码
+	// 只有可能是上面的c.node().put()执行失败，才可能需要重新去搜索一次确定之前的插入是否成功。
 	var child = b.openBucket(value)
 	if b.buckets != nil {
 		b.buckets[string(key)] = child
@@ -609,10 +617,12 @@ func (b *Bucket) spill() error {
 
 // inlineable returns true if a bucket is small enough to be written inline
 // and if it contains no subbuckets. Otherwise returns false.
+// 判断一个Bucket是否足够小可以变成inline的，如果该Bucket下面有子Bucket，那么是不能inline的
 func (b *Bucket) inlineable() bool {
 	var n = b.rootNode
 
 	// Bucket must only contain a single leaf node.
+	// Bucket当前不是叶子结点
 	if n == nil || !n.isLeaf {
 		return false
 	}
@@ -622,7 +632,7 @@ func (b *Bucket) inlineable() bool {
 	var size = pageHeaderSize
 	for _, inode := range n.inodes {
 		size += leafPageElementSize + len(inode.key) + len(inode.value)
-
+		// 含有子Bucket
 		if inode.flags&bucketLeafFlag != 0 {
 			return false
 		} else if size > b.maxInlineBucketSize() {
@@ -667,7 +677,7 @@ func (b *Bucket) rebalance() {
 }
 
 // node creates a node from a page and associates it with a given parent.
-// 加载制定的page到node中，并挂载到parent下面去。
+// 加载指定的page到node中，并挂载到parent下面去。
 func (b *Bucket) node(pgid pgid, parent *node) *node {
 	_assert(b.nodes != nil, "nodes map expected")
 
@@ -701,7 +711,8 @@ func (b *Bucket) node(pgid pgid, parent *node) *node {
 	return n
 }
 
-// free recursively frees all pages in the bucket.
+// free recursively(递归) frees all pages in the bucket.
+// 递归释放Bucket下面所有的页
 func (b *Bucket) free() {
 	if b.root == 0 {
 		return

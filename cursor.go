@@ -303,6 +303,7 @@ func (c *Cursor) searchPage(key []byte, p *page) {
 	inodes := p.branchPageElements()
 
 	var exact bool
+	// TODO 此处必须要用p.count来限制对inodes的访问，否则会发生越界访问
 	index := sort.Search(int(p.count), func(i int) bool {
 		// TODO(benbjohnson): Optimize this range search. It's a bit hacky right now.
 		// sort.Search() finds the lowest index where f() != -1 but we need the highest index.
@@ -362,7 +363,9 @@ func (c *Cursor) keyValue() ([]byte, []byte, uint32) {
 }
 
 // node returns the node that the cursor is currently positioned on.
-// 返回当前游标指向位置的node，不存在则创建
+// 将搜索路径上经过的所有结点都加载进内存，并返回当前游标指向的结点。
+// 因为Cursor同时支持在page和node中搜索，因此存在搜索到的page尚未初始化为node的情况
+// TODO 此处应该可以优化
 func (c *Cursor) node() *node {
 	_assert(len(c.stack) > 0, "accessing a node with a zero-length cursor stack")
 
@@ -373,7 +376,7 @@ func (c *Cursor) node() *node {
 
 	// Start from root and traverse down the hierarchy.
 	var n = c.stack[0].node
-	if n == nil {
+	if n == nil { // 该page尚未被初始化为node
 		n = c.bucket.node(c.stack[0].page.id, nil)
 	}
 	for _, ref := range c.stack[:len(c.stack)-1] {

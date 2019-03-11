@@ -313,6 +313,7 @@ func (n *node) splitTwo(pageSize int) (*node, *node) {
 
 	// Create a new node and add it to the parent.
 	// 创建了一个新node，并将当前node的父节点设为它的父节点;
+	// TODO 为何不放在n.parent.inodes里面呢？
 	next := &node{bucket: n.bucket, isLeaf: n.isLeaf, parent: n.parent}
 	n.parent.children = append(n.parent.children, next)
 
@@ -479,7 +480,8 @@ func (n *node) rebalance() {
 			// Reparent all child nodes being moved.
 			// 为何没有递归的子结点进行rebalance呢
 			for _, inode := range n.inodes {
-				// TODO 上面也有一个child变量，难道此child的作用域只在for循环内？是的
+				// TODO 这个为何不是对所有的child进行处理呢？是否会有逻辑错误？
+				// 上面也有一个child变量，难道此child的作用域只在for循环内？是的
 				if child, ok := n.bucket.nodes[inode.pgid]; ok {
 					child.parent = n
 				}
@@ -586,6 +588,8 @@ func (n *node) removeChild(target *node) {
 
 // dereference causes the node to copy all its inode key/value references to heap memory.
 // This is required when the mmap is reallocated so inodes are not pointing to stale data.
+// 解除引用之前会复制所有inode的key/value。因为在read()方法中，inode的key/value是直接引用的mmap的内存块(切片引用)，
+// 因此在重新mmap的时候，之前mmap的内存块会失效，所以需要复制一份数据出来。
 func (n *node) dereference() {
 	if n.key != nil {
 		key := make([]byte, len(n.key))

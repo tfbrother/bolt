@@ -268,7 +268,12 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 
 	// Recursively delete all child buckets.
 	child := b.Bucket(key)
+	// 递归删除该Bucket下面的子Bucket
+	// * 如何找到所有的子Bucket？
+	//   * 通过Cursor遍历该Bucket下面所有的inode，通过inode的flags来确定是否是子Bucket。
+	//   * TODO 查找子Bucket的过程可以优化，需要在存储上调整。如果该Bucket上inode太多，这个查找过程是O(N)的。
 	err := child.ForEach(func(k, v []byte) error {
+		// v == nil 说明是一个子Bucket
 		if v == nil {
 			if err := child.DeleteBucket(k); err != nil {
 				return fmt.Errorf("delete bucket: %s", err)
@@ -420,6 +425,7 @@ func (b *Bucket) ForEach(fn func(k, v []byte) error) error {
 		return ErrTxClosed
 	}
 	c := b.Cursor()
+	// TODO 采用的是B+树的后序遍历，具体可以看First和Next的源码
 	for k, v := c.First(); k != nil; k, v = c.Next() {
 		if err := fn(k, v); err != nil {
 			return err
@@ -533,6 +539,7 @@ func (b *Bucket) forEachPageNode(fn func(*page, *node, int)) {
 	b._forEachPageNode(b.root, 0, fn)
 }
 
+// B+树的深度优先遍历顺序进行释放
 func (b *Bucket) _forEachPageNode(pgid pgid, depth int, fn func(*page, *node, int)) {
 	var p, n = b.pageNode(pgid)
 

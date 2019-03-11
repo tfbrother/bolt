@@ -270,6 +270,7 @@ func (db *DB) mmap(minsz int) error {
 	}
 
 	// Dereference all mmap references before unmapping.
+	// 事务在commit过程中，存在需要重新mmap的情况，所以需要考虑
 	if db.rwtx != nil {
 		db.rwtx.root.dereference()
 	}

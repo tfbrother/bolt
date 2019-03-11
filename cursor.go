@@ -174,9 +174,11 @@ func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 }
 
 // first moves the cursor to the first leaf element under the last page in the stack.
+// 切换page/node
 func (c *Cursor) first() {
 	for {
 		// Exit when we hit a leaf page.
+		// 后序遍历
 		var ref = &c.stack[len(c.stack)-1]
 		if ref.isLeaf() {
 			break
@@ -224,6 +226,7 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 	for {
 		// Attempt to move over one element until we're successful.
 		// Move up the stack as we hit the end of each page in our stack.
+		// 还在同一个page/node中，下一个元素就是上一个元素的index+1
 		var i int
 		for i = len(c.stack) - 1; i >= 0; i-- {
 			elem := &c.stack[i]
@@ -235,17 +238,20 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 
 		// If we've hit the root page then stop and return. This will leave the
 		// cursor on the last element of the last page.
+		// 说明已经遍历完了，上面的循环中没有找到一个可用的elem.index
 		if i == -1 {
 			return nil, nil, 0
 		}
 
 		// Otherwise start from where we left off in the stack and find the
 		// first element of the first leaf page.
+		// 弹出栈顶元素
 		c.stack = c.stack[:i+1]
 		c.first()
 
 		// If this is an empty page then restart and move back up the stack.
 		// https://github.com/boltdb/bolt/issues/450
+		// 即将要遍历的page是空的
 		if c.stack[len(c.stack)-1].count() == 0 {
 			continue
 		}

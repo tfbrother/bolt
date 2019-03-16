@@ -47,6 +47,7 @@ type DB struct {
 	// A panic is issued if the database is in an inconsistent state. This
 	// flag has a large performance impact so it should only be used for
 	// debugging purposes.
+	// 严格模式启用后，每次commit时，会Check()一下状态，这个对性能影响很大，主要用于debug。
 	StrictMode bool
 
 	// Setting the NoSync flag will cause the database to skip fsync()

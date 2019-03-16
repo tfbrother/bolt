@@ -35,6 +35,7 @@ func flock(db *DB, mode os.FileMode, exclusive bool, timeout time.Duration) erro
 		}
 
 		// Wait for a bit and try again.
+		// 如果既没获得锁，返回码又是EOULDBLOCK，那么循环重试
 		time.Sleep(50 * time.Millisecond)
 	}
 }

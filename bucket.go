@@ -407,6 +407,7 @@ func (b *Bucket) NextSequence() (uint64, error) {
 
 	// Materialize the root node if it hasn't been already so that the
 	// bucket will be saved during commit.
+	// TODO 为何要在此处执行这段代码？是避免事务提交的时候无法保存到？
 	if b.rootNode == nil {
 		_ = b.node(b.root, nil)
 	}
@@ -592,6 +593,7 @@ func (b *Bucket) spill() error {
 
 		// Skip writing the bucket if there are no materialized nodes.
 		// TODO 为何此处还要进行这个检查？child在进行spill后，可能变成inline Bucket了
+		// NextSequence()，SetSequence()这两个方法中做了类似的事情，
 		if child.rootNode == nil {
 			continue
 		}

@@ -392,6 +392,7 @@ func (tx *Tx) Check() <-chan error {
 	return ch
 }
 
+// 检查事务的状态
 func (tx *Tx) check(ch chan error) {
 	// Check if any pages are double freed.
 	freed := make(map[pgid]bool)

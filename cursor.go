@@ -380,7 +380,7 @@ func (c *Cursor) node() *node {
 		return ref.node
 	}
 
-	// Start from root and traverse down the hierarchy.
+	// Start from root and traverse down the hierarchy(层级，等级制度).
 	var n = c.stack[0].node
 	if n == nil { // 该page尚未被初始化为node
 		n = c.bucket.node(c.stack[0].page.id, nil)

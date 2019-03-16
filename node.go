@@ -514,7 +514,7 @@ func (n *node) rebalance() {
 		return
 	}
 
-	// TODO 为何此处要这样检查呢？
+	// TODO 为何此处要这样检查呢？正常情况下是不存在这种情况的。
 	_assert(n.parent.numChildren() > 1, "parent must have at least 2 children")
 
 	// Destination node is right sibling if idx == 0, otherwise left sibling.
